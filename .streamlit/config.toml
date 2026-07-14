@@ -1,0 +1,8 @@
+# Deliberate light theme: the dashboard's categorical palette is validated against the light
+# surface (see dashboard/app.py). primaryColor is the first categorical hue (Okabe-Ito blue).
+[theme]
+base = "light"
+primaryColor = "#0072B2"
+
+[browser]
+gatherUsageStats = false

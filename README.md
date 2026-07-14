@@ -98,6 +98,30 @@ itself when the real `x-requests-remaining` counter hits zero and warns at 80%.
 Swap providers without touching the pipeline: `market/providers.py` has `TheOddsAPIProvider` (wired)
 and a `SportsGameOddsProvider` stub (80+ books) — both map to the same `BookQuote`.
 
+## Visual dashboard
+
+A local [Streamlit](https://streamlit.io/) dashboard for seeing it all clearly — live book quotes and
+outliers, the 2H line moving over time from your collected snapshots, and the falsification harness
+with its verdict. Runs on your machine (live odds + your local SQLite can't be reached by a hosted
+page).
+
+```bash
+pip install -r requirements-dashboard.txt     # streamlit, altair, requests
+streamlit run dashboard/app.py                 # opens http://localhost:8501 in your browser
+```
+
+Three tabs:
+- **📡 Live odds** — pull a game, see each book vs the fair line, and the ranked outliers. It flags
+  loudly when there's no sharp book in the feed (fair line = soft consensus, edges untrustworthy).
+- **📈 Line movement** — reads `data/odds.sqlite` and charts each book's 2H line over time. This is
+  the picture of the instrument working.
+- **🧪 Falsification harness** — the seductive +ROI table, the p-values, month-by-month stability,
+  and a big **PROJECT KILLED / significant** verdict. Toggle "inject a real edge" to watch it isolate one.
+
+The categorical palette (Okabe–Ito) is validated colorblind-safe against the light surface; the app
+commits to a light theme by design. Charts are Altair; pure data logic lives in `dashboard/data.py`
+(no Streamlit import, unit-tested).
+
 ## Kill criteria (executable, exit non-zero)
 
 - 500 graded snapshots, CLV not positive → `KILL: no CLV`

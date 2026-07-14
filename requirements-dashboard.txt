@@ -1,0 +1,5 @@
+# The local dashboard. Install with: pip install -r requirements-dashboard.txt
+# (altair ships with streamlit, but pin it so charts are stable.)
+streamlit>=1.30
+altair>=5.0
+requests>=2.31

@@ -57,13 +57,35 @@ def simulate(n_games: int = 4000, n_strategies: int = 60, inject_edge: bool = Fa
 
     if inject_edge:
         # One strategy with a genuine, comfortably-significant edge on the games it selects.
-        sig = rng.normal(0.0, 1.0, n_games)
+        # Use a DEDICATED rng so the injected edge is identical regardless of how many noise
+        # strategies preceded it — otherwise its realized strength (and detectability) drifts
+        # with n_strategies, which would make the dashboard slider behave erratically.
+        edge_rng = np.random.default_rng(20260714)
+        sig = edge_rng.normal(0.0, 1.0, n_games)
         bet_mask = sig > 0.5
-        true_win = rng.random(n_games) < 0.58
+        true_win = edge_rng.random(n_games) < 0.585
         won = np.where(bet_mask, true_win.astype(float), np.nan)
         strat_bets[0] = won  # replace strategy 0
 
     return df, strat_bets
+
+
+def per_game_performance(strat_bets, n_games: int) -> np.ndarray:
+    """Per-game P&L matrix (n_games, K): profit on games a strategy bet, 0 where it didn't.
+
+    Columns share the game index, so the stationary bootstrap resamples games JOINTLY — the correct
+    White/Hansen setup (respects that strategies bet on overlapping games) and it uses the full
+    sample instead of truncating to the shortest strategy. All-zero columns (never bet) are dropped.
+    """
+    cols = []
+    for won in strat_bets:
+        perf = np.zeros(n_games)
+        mask = ~np.isnan(won)
+        if mask.any():
+            perf[mask] = profit_per_unit(won[mask].astype(int))
+        cols.append(perf)
+    P = np.column_stack(cols) if cols else np.zeros((n_games, 0))
+    return P[:, np.any(P != 0, axis=0)]
 
 
 def run(n_games=4000, n_strategies=60, inject_edge=False):
@@ -121,12 +143,10 @@ def run(n_games=4000, n_strategies=60, inject_edge=False):
     print(f"\n[Benjamini-Hochberg] strategies surviving FDR<0.05: {bh.n_rejected} / {len(res)}")
 
     # --- 3. White's Reality Check / Hansen SPA on the best of N ---
-    # Build a (T, K) performance matrix; pad shorter series by resampling to a common length.
-    valid = [p for p in per_bet_profit if p.size >= 30]
-    K = len(valid)
-    T = min(min(p.size for p in valid), 800)
-    rng = np.random.default_rng(0)
-    P = np.column_stack([rng.choice(p, size=T, replace=True) for p in valid])
+    # Per-game performance matrix on the shared game index (0 where a strategy didn't bet), so the
+    # bootstrap resamples games jointly and uses the full sample.
+    P = per_game_performance(strat_bets, n_games)
+    K = P.shape[1]
     spa = spa_test(P, n_bootstrap=1000, mean_block=10.0)
     print(f"\n[Reality Check / SPA]  best-of-{K} strategies")
     print(f"    White's Reality Check p = {spa.reality_check_p:.3f}")

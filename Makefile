@@ -1,4 +1,4 @@
-.PHONY: help install install-live test eval market collect intel probe monitor kill clean
+.PHONY: help install install-live install-dashboard test eval market collect intel probe monitor dashboard kill clean
 
 help:
 	@echo "h2-totals-lab"
@@ -10,6 +10,7 @@ help:
 	@echo "  make intel     run the intel-extract demo (needs ANTHROPIC_API_KEY)"
 	@echo "  make probe     probe a live odds feed for 2H totals (needs ODDS_API_KEY + network)"
 	@echo "  make monitor   continuously monitor live 2H odds (needs ODDS_API_KEY + network)"
+	@echo "  make dashboard launch the local Streamlit dashboard in your browser"
 	@echo "  make kill      run the executable kill-criteria checks (exits non-zero to KILL)"
 
 install:
@@ -17,6 +18,9 @@ install:
 
 install-live:
 	python -m pip install -r requirements.txt -r requirements-extra.txt
+
+install-dashboard:
+	python -m pip install -r requirements.txt -r requirements-dashboard.txt
 
 test:
 	python -m pytest
@@ -38,6 +42,9 @@ probe:
 
 monitor:
 	python -m collector.monitor --dry-run
+
+dashboard:
+	streamlit run dashboard/app.py
 
 kill:
 	python -m eval.kill

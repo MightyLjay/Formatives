@@ -39,24 +39,23 @@ def _stationary_bootstrap_indices(
 ) -> np.ndarray:
     """Politis-Romano stationary bootstrap index matrix, shape (n_boot, n).
 
-    Blocks have geometric length with mean `mean_block`; start points are uniform. Wrapping is
-    circular so every observation is equally likely regardless of position.
+    Blocks have geometric length with mean `mean_block`; start points are uniform; wrapping is
+    circular so every observation is equally likely. Vectorized: a restart mask marks new blocks,
+    each position inherits the start drawn at its most recent restart plus its offset within the
+    block. Equivalent in distribution to the sequential construction, but fast at full sample size.
     """
     if n <= 0:
         return np.empty((n_boot, 0), dtype=int)
     p = 1.0 / max(mean_block, 1.0)
-    idx = np.empty((n_boot, n), dtype=int)
-    for b in range(n_boot):
-        out = np.empty(n, dtype=int)
-        cur = rng.integers(0, n)
-        for t in range(n):
-            out[t] = cur
-            if rng.random() < p:
-                cur = rng.integers(0, n)       # start a new block
-            else:
-                cur = (cur + 1) % n            # continue current block (circular)
-        idx[b] = out
-    return idx
+    ar = np.arange(n)
+    restart = rng.random((n_boot, n)) < p
+    restart[:, 0] = True                                   # every series starts a block at t=0
+    starts = rng.integers(0, n, size=(n_boot, n))          # candidate block-start index at each t
+    last_restart = np.where(restart, ar[None, :], 0)
+    np.maximum.accumulate(last_restart, axis=1, out=last_restart)  # index of the current block's start
+    block_start = np.take_along_axis(starts, last_restart, axis=1)  # the drawn start for that block
+    offset = ar[None, :] - last_restart                    # position within the current block
+    return (block_start + offset) % n
 
 
 def spa_test(

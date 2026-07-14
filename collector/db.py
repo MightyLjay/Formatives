@@ -11,6 +11,7 @@ purpose.
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -66,6 +67,10 @@ CREATE TABLE IF NOT EXISTS grades (
 
 
 def connect(path: str) -> sqlite3.Connection:
+    if path != ":memory:":
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)  # so --db data/odds.sqlite works on a fresh clone
     conn = sqlite3.connect(path, timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
