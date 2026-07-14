@@ -63,6 +63,14 @@ class TheOddsAPIProvider:
         """Upcoming/live events for the sport: [{id, commence_time, home_team, away_team}, ...]."""
         return self._get(f"/sports/{self.sport}/events")
 
+    def list_sports(self, include_inactive: bool = False) -> list[dict]:
+        """All sports the API knows: [{key, group, title, active, ...}, ...].
+
+        This endpoint does NOT consume quota, so it's the cheap way to see which leagues are live
+        right now (NCAAB is off-season much of the year; WNBA/NBA come and go)."""
+        params = {"all": "true"} if include_inactive else {}
+        return self._get("/sports", **params)
+
     def fetch(self, game_id: str) -> list[BookQuote]:
         """Return every book's 2H-total two-way price for one event id, at this instant.
 

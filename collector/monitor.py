@@ -19,6 +19,7 @@ import argparse
 import signal
 import time
 
+from market.config import load_dotenv
 from market.providers import TheOddsAPIProvider
 
 from . import db
@@ -109,6 +110,7 @@ def _dry_run() -> None:
 
 
 def main() -> None:
+    load_dotenv()  # pick up ODDS_API_KEY from a .env file if present
     ap = argparse.ArgumentParser(description="continuously monitor 2H-total odds")
     ap.add_argument("--dry-run", action="store_true", help="offline demo (fixture provider)")
     ap.add_argument("--sport", default="basketball_ncaab")

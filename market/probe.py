@@ -18,13 +18,35 @@ import argparse
 import json
 import sys
 
+from .config import load_dotenv
 from .fair import fair_line
 from .outliers import find_outliers
 from .providers import TheOddsAPIProvider
 
 
-def probe(sport: str, market: str, event_id: str | None, raw: bool) -> int:
-    prov = TheOddsAPIProvider(sport=sport, market=market)
+def print_active_sports(regions: str) -> int:
+    """List the leagues that are live/in-season right now (free — no quota cost)."""
+    prov = TheOddsAPIProvider(regions=regions)
+    if not prov.api_key:
+        print("ERROR: set ODDS_API_KEY (or put it in a .env file).", file=sys.stderr)
+        return 2
+    try:
+        sports = prov.list_sports()
+    except Exception as e:
+        print(f"ERROR listing sports: {e}", file=sys.stderr)
+        return 2
+    active = [s for s in sports if s.get("active")]
+    print(f"{len(active)} active leagues right now (quota untouched). Basketball first:\n")
+    bball = [s for s in active if "basketball" in s.get("key", "")]
+    other = [s for s in active if "basketball" not in s.get("key", "")]
+    for s in bball + other:
+        star = "  <-- basketball" if s in bball else ""
+        print(f"  {s.get('key','?'):28s} {s.get('title','')}{star}")
+    return 0
+
+
+def probe(sport: str, market: str, event_id: str | None, raw: bool, regions: str = "us,us2") -> int:
+    prov = TheOddsAPIProvider(sport=sport, market=market, regions=regions)
     if not prov.api_key:
         print("ERROR: set ODDS_API_KEY (get one free at https://the-odds-api.com/).", file=sys.stderr)
         return 2
@@ -87,13 +109,19 @@ def probe(sport: str, market: str, event_id: str | None, raw: bool) -> int:
 
 
 def main() -> None:
+    load_dotenv()  # pick up ODDS_API_KEY from a .env file if present
     ap = argparse.ArgumentParser(description="probe a live odds provider for 2H totals, then report")
     ap.add_argument("--sport", default="basketball_ncaab")
     ap.add_argument("--market", default="totals_h2")
     ap.add_argument("--event", default=None, help="probe a specific event id (else the first on the board)")
+    ap.add_argument("--regions", default="us,us2",
+                    help="comma-separated regions (us,us2,uk,eu,au). Add 'eu' to reach Pinnacle/sharp books.")
+    ap.add_argument("--list-sports", action="store_true", help="list leagues live right now (no quota cost)")
     ap.add_argument("--raw", action="store_true", help="also dump the parsed quotes as JSON")
     args = ap.parse_args()
-    sys.exit(probe(args.sport, args.market, args.event, args.raw))
+    if args.list_sports:
+        sys.exit(print_active_sports(args.regions))
+    sys.exit(probe(args.sport, args.market, args.event, args.raw, args.regions))
 
 
 if __name__ == "__main__":
