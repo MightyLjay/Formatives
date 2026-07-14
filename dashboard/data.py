@@ -78,6 +78,27 @@ SNAPSHOT_COLUMNS = ["game_id", "book", "market", "line", "over_odds", "under_odd
                     "captured_at", "source", "captured_dt"]
 
 
+def market_probability_series(game_df: pd.DataFrame, reference: float, sigma: float = 10.0) -> pd.DataFrame:
+    """The MARKET's implied P(final total > `reference`) over time — NOT your edge.
+
+    At each poll, the consensus line (median across books) is the market's own estimate of the final
+    total. We model the final total as Normal(consensus, sigma) and read off P(> reference). As the
+    game progresses the consensus drifts and this curve heads toward 0 or 1.
+
+    HONESTY: this is the bookmaker's probability, reflected back. Betting the likely side at the
+    book's price loses the vig — that is the entire lesson of FINDINGS.md. The edge is never here;
+    it is in book *disagreement* (dispersion), the line *moving* before soft books react (steam), and
+    *information* the line hasn't priced yet. `sigma` is uncalibrated shorthand, not a real forecast.
+    """
+    if game_df.empty:
+        return pd.DataFrame(columns=["captured_at", "captured_dt", "consensus_line", "p_over_ref"])
+    g = (game_df.groupby("captured_at")["line"].median().reset_index()
+         .rename(columns={"line": "consensus_line"}))
+    g["captured_dt"] = pd.to_datetime(g["captured_at"], unit="s")
+    g["p_over_ref"] = 1.0 - stats.norm.cdf((reference - g["consensus_line"]) / max(sigma, 1e-6))
+    return g
+
+
 def load_snapshots(db_path: str) -> pd.DataFrame:
     """Load every stored snapshot as a DataFrame with a real datetime column, ordered by time.
 

@@ -1,9 +1,11 @@
 """The dashboard's pure data logic (no Streamlit): harness analysis + snapshot loading."""
 import numpy as np
 
+import pandas as pd
+
 from collector import db as cdb
 from collector.snapshot import make_snapshot, persist_snapshots
-from dashboard.data import load_snapshots, run_harness_analysis
+from dashboard.data import load_snapshots, market_probability_series, run_harness_analysis
 
 
 def test_harness_no_edge_is_killed():
@@ -46,3 +48,27 @@ def test_load_snapshots_empty_db(tmp_path):
     cdb.connect(path).close()
     df = load_snapshots(path)
     assert df.empty
+
+
+def test_load_snapshots_missing_file_is_friendly(tmp_path):
+    df = load_snapshots(str(tmp_path / "never_created.sqlite"))
+    assert df.empty  # returns empty, does NOT raise or create a file
+
+
+def test_market_probability_reflects_the_line():
+    # Two polls: consensus rises from 150 to 158. P(final > 150) must increase toward 1.
+    df = pd.DataFrame({
+        "captured_at": [1000, 1000, 1060, 1060],
+        "book": ["a", "b", "a", "b"],
+        "line": [149.0, 151.0, 157.0, 159.0],  # medians 150 then 158
+    })
+    out = market_probability_series(df, reference=150.0, sigma=10.0)
+    assert list(out["consensus_line"]) == [150.0, 158.0]
+    assert out["p_over_ref"].iloc[0] == 0.5          # consensus == reference -> 50/50
+    assert out["p_over_ref"].iloc[1] > 0.5           # consensus moved above reference
+    assert (out["p_over_ref"].between(0, 1)).all()
+
+
+def test_market_probability_empty():
+    out = market_probability_series(pd.DataFrame(columns=["captured_at", "line"]), 150.0)
+    assert out.empty

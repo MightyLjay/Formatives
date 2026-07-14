@@ -34,7 +34,7 @@ st.caption(
 )
 
 tab_live, tab_move, tab_harness = st.tabs(
-    ["📡 Live odds", "📈 Line movement", "🧪 Falsification harness"]
+    ["📡 Live odds", "📈 Live game", "🧪 Falsification harness"]
 )
 
 
@@ -121,30 +121,65 @@ with tab_move:
         snaps = pd.DataFrame()
 
     if snaps.empty:
-        st.info("No snapshots yet. Run the monitor to collect the 2H line over time:\n\n"
-                "`python -m collector.monitor --sport basketball_wnba --interval 60 "
-                "--events <eventId> --db data/odds.sqlite`")
+        st.info(
+            "No snapshots yet. Run the monitor to collect a game's line over time. Track the "
+            "**full-game** total live, or the **2H** total:\n\n"
+            "`python -m collector.monitor --sport basketball_wnba --market totals --interval 60 "
+            "--events <eventId> --db data/odds.sqlite`\n\n"
+            "(use `--market totals_h2` for the 2nd-half line)"
+        )
     else:
         games = sorted(snaps["game_id"].unique())
         game = st.selectbox("Game", games, index=len(games) - 1)
-        g = snaps[snaps["game_id"] == game].copy()
+        g0 = snaps[snaps["game_id"] == game].copy()
+        markets = sorted(g0["market"].unique())
+        mkt = st.selectbox("Market", markets, index=0) if len(markets) > 1 else markets[0]
+        g = g0[g0["market"] == mkt].copy()
 
-        m1, m2, m3 = st.columns(3)
+        m1, m2, m3, m4 = st.columns(4)
         m1.metric("Books seen", g["book"].nunique())
         m2.metric("Snapshots", len(g))
         m3.metric("Line spread (pts)", f"{g['line'].max() - g['line'].min():.1f}")
+        m4.metric("Latest consensus", f"{g.groupby('captured_at')['line'].median().iloc[-1]:.1f}")
 
-        st.markdown("**2H total line movement** — each book over time")
+        # ---- 1. the market's evolving estimate: each book's line over time ----
+        st.markdown(f"**`{mkt}` line movement** — each book's number over time (the market's estimate)")
         books = sorted(g["book"].unique())
         line = alt.Chart(g).mark_line(point=True, strokeWidth=2).encode(
             x=alt.X("captured_dt:T", title="captured at"),
-            y=alt.Y("line:Q", title="2H total line", scale=alt.Scale(zero=False)),
+            y=alt.Y("line:Q", title="total line", scale=alt.Scale(zero=False)),
             color=alt.Color("book:N",
-                            scale=alt.Scale(domain=books, range=PALETTE[:len(books)]),
+                            scale=alt.Scale(domain=books, range=(PALETTE * 3)[:len(books)]),
                             legend=alt.Legend(title="book")),
             tooltip=["book", "line", "over_odds", "under_odds", "captured_dt"],
-        ).properties(height=380).interactive()
+        ).properties(height=340).interactive()
         st.altair_chart(line, use_container_width=True)
+        st.caption("Where books **disagree** at the same moment is a dispersion edge (bet the outlier). "
+                   "Where the consensus **jumps** and a book lags is steam. Neither needs a prediction.")
+
+        # ---- 2. the market's implied P(over a reference) — honestly labelled ----
+        st.markdown("**Market's implied probability of going OVER a reference number**")
+        st.warning(
+            "This curve is the **bookmaker's** probability, reflected back — **not your edge.** "
+            "Betting the likely side at the book's price pays the vig and loses (see FINDINGS.md). "
+            "It's here to *read the market*, not to beat it."
+        )
+        consensus0 = float(g.groupby("captured_at")["line"].median().iloc[0])
+        c1, c2 = st.columns(2)
+        reference = c1.number_input("Reference total (the number you'd bet)", value=round(consensus0, 1))
+        sigma = c2.slider("Uncertainty σ (uncalibrated — a rough width, not a forecast)", 4.0, 25.0, 10.0)
+        prob = data.market_probability_series(g, reference, sigma)
+        if not prob.empty:
+            pchart = alt.Chart(prob).mark_line(point=True, strokeWidth=2, color=PALETTE[0]).encode(
+                x=alt.X("captured_dt:T", title="captured at"),
+                y=alt.Y("p_over_ref:Q", title=f"P(final > {reference:g})",
+                        scale=alt.Scale(domain=[0, 1]), axis=alt.Axis(format="%")),
+                tooltip=[alt.Tooltip("consensus_line:Q", title="consensus"),
+                         alt.Tooltip("p_over_ref:Q", format=".1%"), "captured_dt"],
+            ).properties(height=260)
+            half = alt.Chart(pd.DataFrame({"y": [0.5]})).mark_rule(
+                strokeDash=[4, 4], color=MUTED).encode(y="y:Q")
+            st.altair_chart((pchart + half), use_container_width=True)
 
         with st.expander("Raw snapshots"):
             st.dataframe(g[["captured_dt", "book", "line", "over_odds", "under_odds", "source"]],
