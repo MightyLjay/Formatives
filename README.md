@@ -71,6 +71,33 @@ make test                                       # run the full test suite (leaka
 Optional live-feed / model / LLM extras are in `requirements-extra.txt` and are imported lazily —
 the tested core does not need them.
 
+## Monitoring live odds
+
+The market/collector layers run against a real odds feed once you have (a) a provider key and (b)
+network egress. Run the monitor on your own machine or a small always-on VPS — it's cron/supervisor
+friendly and the append-only store is crash-safe, which is the whole point.
+
+```bash
+make install-live                       # adds requests, anthropic, etc.
+export ODDS_API_KEY=...                 # free tier at https://the-odds-api.com/
+
+# 1) PROBE FIRST — does a live 2H total even exist for this sport? (Step-0 discipline)
+python -m market.probe --sport basketball_ncaab --market totals_h2
+
+# 2) If it does, monitor it — append every quote as an immutable, timestamped snapshot:
+python -m collector.monitor --sport basketball_ncaab --interval 60 \
+       --events <eventId> <eventId> --db data/odds.sqlite
+```
+
+**The 2H total is an in-play line** — it typically only appears once a game is live (often at
+halftime), and for many leagues it doesn't exist or isn't liquid. The probe tells you before you
+spend anything. **Quota**: each polled event costs ~1 credit; poll only the games you care about
+(`--events`) at a sane `--interval`, or the free tier is gone in an afternoon. The monitor stops
+itself when the real `x-requests-remaining` counter hits zero and warns at 80%.
+
+Swap providers without touching the pipeline: `market/providers.py` has `TheOddsAPIProvider` (wired)
+and a `SportsGameOddsProvider` stub (80+ books) — both map to the same `BookQuote`.
+
 ## Kill criteria (executable, exit non-zero)
 
 - 500 graded snapshots, CLV not positive → `KILL: no CLV`
