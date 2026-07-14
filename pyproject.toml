@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "h2-totals-lab"
+version = "0.1.0"
+description = "Research harness for 2nd-half basketball totals: market coverage, live collector, LLM intel, falsification-first eval."
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "pandas>=2.0", "scipy>=1.10"]
+
+# Note: the execution package lives in exec/ to match PLAN_V2.md's Step 7 naming.
+# In Python 3 `exec` is a builtin *function*, not a reserved keyword, so `import exec`
+# and `from exec import kelly` are both legal.
+[tool.setuptools]
+packages = ["market", "collector", "intel", "features", "eval", "model", "exec"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

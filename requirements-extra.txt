@@ -1,0 +1,14 @@
+# Optional extras — imported lazily, NOT needed by the tested core.
+# Install when wiring live feeds, the distributional model, or the LLM intel layer.
+
+# --- market / collector: live feeds ---
+requests>=2.31
+
+# --- intel: the Claude API layer ---
+anthropic>=0.40
+
+# --- model: distributional + calibration (Tier 3) ---
+lightgbm>=4.0
+ngboost>=0.5
+mapie>=0.8
+# numpyro>=0.13   # hierarchical model; pulls in jax — install deliberately

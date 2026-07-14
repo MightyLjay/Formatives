@@ -1,0 +1,24 @@
+# data & artifacts
+*.sqlite
+*.sqlite-journal
+*.db
+data/snapshots/
+data/*.parquet
+!data/.gitkeep
+
+# secrets — never commit keys
+.env
+*.key
+secrets.*
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+
+# os
+.DS_Store
