@@ -1,9 +1,9 @@
 // Line Tracker — a read-only overlay that graphs numbers you pick on a page.
 //
-// v0.5: track several numbers at once, each labelled (Over / Under / Total / …); read by SCREEN
-// POSITION each tick (survives live re-renders); and lock onto the SMALLEST, tightest element with
-// a short number at the click point (so it grabs the odds cell, not a giant background/scoreboard
-// container). Reports what it found when it can't read a number.
+// v0.6: track several numbers at once, each labelled (Over / Under / Total / …); read by SCREEN
+// POSITION each tick (survives live re-renders). Reads the EXACT text node under the cursor
+// (caretRangeFromPoint) so it lands on the odds digits, not the wrapping row or the big scoreboard;
+// falls back to the smallest numeric cell in the stack. Diagnostics are escaped so they show fully.
 //
 // Sends NOTHING anywhere, stores NOTHING, cannot place a bet. Reads ONE book's own numbers, so it
 // is not an edge by itself — an edge needs a sharp fair line (see FINDINGS.md). Each line is scaled
@@ -20,7 +20,6 @@
     { label: "Total", color: "#0072B2" },
     { label: "Other", color: "#CC79A7" },
   ];
-  var MAX_TEXT = 16;  // ignore elements whose text is longer than this (containers/overlays, not odds)
   var state = { tracks: [], t0: null, timer: null, picking: false, pendingLabel: null, pendingColor: null, justPicked: false, intervalMs: 2000 };
 
   var panel = document.createElement("div");
@@ -78,14 +77,39 @@
     outline.style.display = "block"; outline.style.left = r.left + "px"; outline.style.top = r.top + "px"; outline.style.width = r.width + "px"; outline.style.height = r.height + "px";
   }
 
+  // A plain "tag.firstclass" label — NO angle brackets, so it's safe to drop into innerHTML
+  // (an "<div ...>" string would be parsed as a real, invisible element — that's why the old
+  // diagnostic looked cut off at "only found ").
   function describe(el) {
     var c = (el.className && el.className.toString) ? el.className.toString().trim().split(/\s+/)[0] : "";
-    return "<" + (el.tagName || "?").toLowerCase() + (c ? ' class="' + c.slice(0, 22) + '"' : "") + ">";
+    return (el.tagName || "?").toLowerCase() + (c ? "." + c.slice(0, 22) : "");
   }
-  // Read the number at a screen spot. Scan the element stack, keep only SHORT numeric texts (skip
-  // giant containers/overlays), and among those pick the SMALLEST bounding box — the tight odds cell.
+  function numberIn(str) {
+    if (!str) return null;
+    var m = str.replace(/[,\s]/g, "").match(/-?\d+(?:\.\d+)?/);
+    return m ? parseFloat(m[0]) : null;
+  }
+  // Read the number at a screen spot. FIRST pinpoint the exact text node under the cursor
+  // (caretRangeFromPoint) — that lands on the odds digits themselves, not a wrapping row. If that
+  // node's short text has a number, use it. Otherwise fall back to scanning the element stack and
+  // taking the SMALLEST box that carries a number (the tight cell, never the big scoreboard).
   function numberAt(px, py) {
     var vx = px - window.scrollX, vy = py - window.scrollY;
+
+    var node = null;
+    if (document.caretRangeFromPoint) { var rng = document.caretRangeFromPoint(vx, vy); if (rng) node = rng.startContainer; }
+    else if (document.caretPositionFromPoint) { var pos = document.caretPositionFromPoint(vx, vy); if (pos) node = pos.offsetNode; }
+    if (node) {
+      var host = node.nodeType === 3 ? node.parentElement : node;
+      for (var g = 0; host && g < 3; g++) {                 // climb a couple of levels for the cell
+        if (host === panel || panel.contains(host) || host === outline) break;
+        var txt = (host.textContent || "").replace(/\s+/g, " ").trim();
+        var v = numberIn(txt);
+        if (v != null && txt.length <= 28) return { v: v, text: txt.slice(0, 24) };
+        host = host.parentElement;
+      }
+    }
+
     var els = document.elementsFromPoint ? document.elementsFromPoint(vx, vy) : [document.elementFromPoint(vx, vy)];
     els = els || [];
     var best = null, topTag = "", sawFrame = false;
@@ -95,16 +119,15 @@
       if (!topTag) topTag = describe(el);
       if (el.tagName === "IFRAME") { sawFrame = true; continue; }
       var raw = (el.textContent || "").replace(/\s+/g, " ").trim();
-      if (!raw || raw.length > MAX_TEXT) continue;       // skip big containers/overlays
-      var m = raw.replace(/[,\s]/g, "").match(/-?\d+(?:\.\d+)?/);
-      if (!m) continue;
+      var v2 = numberIn(raw);
+      if (v2 == null) continue;
       var r = el.getBoundingClientRect();
-      var area = Math.max(r.width * r.height, 1);
-      if (best === null || area < best.area) best = { v: parseFloat(m[0]), text: raw.slice(0, 24), area: area };
+      var area = Math.max(r.width * r.height, 1);          // smallest tight box wins over containers
+      if (best === null || area < best.area) best = { v: v2, text: raw.slice(0, 24), area: area };
     }
     if (best) return { v: best.v, text: best.text };
-    if (sawFrame) return { v: null, text: "", diag: "the odds are inside an embedded frame — this tool can't read into it" };
-    return { v: null, text: "", diag: topTag ? ("only found " + topTag + " (no short number)") : "found nothing there" };
+    if (sawFrame) return { v: null, text: "", diag: "the odds sit inside an embedded frame — this tool can't read into it" };
+    return { v: null, text: "", diag: topTag ? ("only found " + topTag) : "found nothing there" };
   }
 
   function onPick(e) {
