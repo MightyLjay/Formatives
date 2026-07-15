@@ -1,14 +1,13 @@
 // Line Tracker — a read-only overlay that graphs numbers you pick on a page.
 //
-// v0.3: track SEVERAL numbers at once, each labelled (Over / Under / Total / …). You click "+ Over"
-// then click the over price; "+ Under" then the under price; and it graphs both live so you can see
-// the whole bet move. Reads by SCREEN POSITION each tick, so it survives live books (1xbet) that
-// rebuild their odds elements constantly.
+// v0.4: track several numbers at once, each labelled (Over / Under / Total / …); read by SCREEN
+// POSITION each tick (survives live re-renders); and see THROUGH transparent overlays that live
+// books stack over their odds (scan the whole element stack at the point, not just the top one).
+// When it can't read a number it says exactly what it found, so the layout can be diagnosed.
 //
-// It sends NOTHING anywhere, stores NOTHING, and cannot place a bet. It reads ONE book's own
-// numbers, so it gives no edge by itself — an edge needs a sharp fair line to compare against
-// (see the repo's FINDINGS.md). Each line is scaled to its OWN range so different-scale numbers
-// (a price ~1.9 and a total ~81) can share the chart honestly; read exact values in the legend.
+// Sends NOTHING anywhere, stores NOTHING, cannot place a bet. Reads ONE book's own numbers, so it
+// is not an edge by itself — an edge needs a sharp fair line (see FINDINGS.md). Each line is scaled
+// to its own range so a price (~1.9) and a total (~81) can share the chart; exact values in the legend.
 (function () {
   if (window.top !== window) return;
   if (window.__h2LineTracker) return;
@@ -77,13 +76,36 @@
     var r = el.getBoundingClientRect();
     outline.style.display = "block"; outline.style.left = r.left + "px"; outline.style.top = r.top + "px"; outline.style.width = r.width + "px"; outline.style.height = r.height + "px";
   }
-  function numberAt(px, py) {
-    var el = document.elementFromPoint(px - window.scrollX, py - window.scrollY);
-    if (!el || panel.contains(el)) return { v: null, text: "" };
-    var raw = (el.textContent || "").replace(/ /g, " ").trim();
-    var m = raw.replace(/[,\s]/g, "").match(/-?\d+(?:\.\d+)?/);
-    return { v: m ? parseFloat(m[0]) : null, text: raw.slice(0, 24) };
+
+  function describe(el) {
+    var c = (el.className && el.className.toString) ? el.className.toString().trim().split(/\s+/)[0] : "";
+    return "<" + (el.tagName || "?").toLowerCase() + (c ? ' class="' + c.slice(0, 22) + '"' : "") + ">";
   }
+  // Read the number at a screen spot, seeing THROUGH transparent overlays: scan the whole element
+  // stack at the point and take the shortest text that is a number (the leaf digits, not a big
+  // container). Reports a diagnostic string when it can't read one.
+  function numberAt(px, py) {
+    var vx = px - window.scrollX, vy = py - window.scrollY;
+    var els = document.elementsFromPoint ? document.elementsFromPoint(vx, vy) : [document.elementFromPoint(vx, vy)];
+    els = els || [];
+    var best = null, topTag = "";
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      if (!el || el === panel || panel.contains(el) || el === outline) continue;
+      if (!topTag) topTag = describe(el);
+      if (el.tagName === "IFRAME") return { v: null, text: "", diag: "the number is inside an embedded frame — this tool can't read into it" };
+      var raw = (el.textContent || "").replace(/ /g, " ").trim();
+      if (!raw) continue;
+      var m = raw.replace(/[,\s]/g, "").match(/-?\d+(?:\.\d+)?/);
+      if (m) {
+        if (best === null || raw.length < best.len) best = { v: parseFloat(m[0]), text: raw.slice(0, 24), len: raw.length };
+        if (raw.length <= 8) break; // basically just the digits — good enough
+      }
+    }
+    if (best) return { v: best.v, text: best.text };
+    return { v: null, text: "", diag: topTag ? ("found " + topTag + " with no digits") : "found nothing there" };
+  }
+
   function onPick(e) {
     if (!state.picking || panel.contains(e.target)) return;
     e.preventDefault(); e.stopPropagation(); if (e.stopImmediatePropagation) e.stopImmediatePropagation();
@@ -91,11 +113,12 @@
     endPicking();
     var r = numberAt(px, py);
     if (r.v == null) {
-      $("#h2-label").innerHTML = '<span style="color:' + ORANGE + '">No number there. Click <b>directly on the digits</b> (zoom in with Ctrl+ if tiny).</span>';
+      $("#h2-label").innerHTML = '<span style="color:' + ORANGE + '">Couldn\'t read a number — ' + (r.diag || "no number") +
+        ". Try clicking right on the digits. If it keeps failing, tell me what it says here.</span>";
       return;
     }
     state.tracks.push({ label: state.pendingLabel, color: state.pendingColor, px: px, py: py, series: [], last: r.v });
-    $("#h2-label").textContent = "Tracking " + state.pendingLabel + " (currently " + r.v + "). Add another, or watch it move.";
+    $("#h2-label").textContent = "Tracking " + state.pendingLabel + " (now " + r.v + '). Add another, or watch it move. reading: "' + r.text + '"';
     if (!state.timer) start();
     renderLegend();
   }
@@ -153,7 +176,6 @@
     ctx.clearRect(0, 0, w, h);
     var any = state.tracks.some(function (tr) { return tr.series.length >= 2; });
     if (!any) { ctx.fillStyle = MUTED; ctx.font = "12px system-ui"; ctx.fillText("pick a number to start…", 10, 22); return; }
-    // shared time axis; each series scaled to its OWN value range (no misleading shared y-axis)
     var tmax = 0; state.tracks.forEach(function (tr) { tr.series.forEach(function (p) { if (p.t > tmax) tmax = p.t; }); });
     var tspan = tmax || 1;
     state.tracks.forEach(function (tr) {
