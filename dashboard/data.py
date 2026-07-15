@@ -21,6 +21,8 @@ from eval.demo import per_game_performance, simulate
 from eval.metrics import BREAKEVEN_AT_MINUS_110, profit_per_unit, roi, sharpe
 from eval.multiple_testing import benjamini_hochberg
 from eval.reality_check import spa_test
+from eval.metrics import profit_per_unit, roi
+from market.clv import points_clv
 from market.fair import FairLine, fair_line
 from market.outliers import Opportunity, find_outliers
 
@@ -119,6 +121,96 @@ def load_snapshots(db_path: str) -> pd.DataFrame:
     if not df.empty:
         df["captured_dt"] = pd.to_datetime(df["captured_at"], unit="s")
     return df
+
+
+# ---------- CLV & results ----------
+
+def fetch_final_totals(sport: str, days_from: int = 3, regions: str = "us,us2") -> dict[str, float]:
+    """{event_id: final_total} for completed games, via The Odds API /scores. Needs ODDS_API_KEY."""
+    from market.providers import TheOddsAPIProvider
+
+    prov = TheOddsAPIProvider(sport=sport, regions=regions)
+    out: dict[str, float] = {}
+    for g in prov.list_scores(days_from=days_from):
+        if g.get("completed") and g.get("scores"):
+            try:
+                out[g["id"]] = float(sum(float(s["score"]) for s in g["scores"]))
+            except (TypeError, ValueError, KeyError):
+                continue
+    return out
+
+
+def _pick_for_game(game_df: pd.DataFrame, min_gap: float = 1.5) -> dict | None:
+    """The earliest outlier 'pick' for one game+market, and its CLV vs the closing consensus.
+
+    Pure book-shopping: at the first poll where a book sits >= min_gap off the consensus, we 'bet'
+    that book's generous side at its line. CLV compares that entry line to the closing consensus.
+    Needs NO final score — CLV is computable from the line time series alone (the fast, low-variance
+    signal). Returns None if no book was ever far enough off the consensus.
+    """
+    if game_df.empty:
+        return None
+    cons = game_df.groupby("captured_at")["line"].median()
+    closing = float(cons.iloc[-1])
+    for t in sorted(game_df["captured_at"].unique()):
+        snap = game_df[game_df["captured_at"] == t]
+        c = float(cons.loc[t])
+        gaps = snap["line"] - c
+        far = gaps.abs() >= min_gap
+        if far.any():
+            i = gaps.abs().where(far).idxmax()
+            row = snap.loc[i]
+            side = "under" if (row["line"] - c) > 0 else "over"
+            price = float(row["under_odds"] if side == "under" else row["over_odds"])
+            return {
+                "book": row["book"], "side": side, "entry_line": float(row["line"]),
+                "entry_price": price, "closing_line": closing,
+                "clv_points": points_clv(side, float(row["line"]), closing),
+                "entry_at": float(t),
+            }
+    return None
+
+
+def clv_and_results(snaps: pd.DataFrame, market: str, results: dict[str, float] | None = None,
+                    min_gap: float = 1.5) -> tuple[pd.DataFrame, dict]:
+    """Per-game outlier picks with CLV, plus win/loss where a final score is available.
+
+    CLV comes from the line time series (always). Grading (win/loss/ROI) needs the final total and
+    only works for the full-game `totals` market — a 2H total also needs the 1st-half score, which
+    /scores doesn't provide, so those picks are marked 'pending'.
+    """
+    results = results or {}
+    dfm = snaps[snaps["market"] == market]
+    rows = []
+    for game_id, gdf in dfm.groupby("game_id"):
+        pick = _pick_for_game(gdf, min_gap)
+        if pick is None:
+            continue
+        rec = {"game_id": game_id, **pick, "result": "pending", "pnl": None}
+        if market == "totals" and game_id in results:
+            final = results[game_id]
+            won = (final < pick["entry_line"]) if pick["side"] == "under" else (final > pick["entry_line"])
+            rec["result"] = "win" if won else "loss"
+            rec["final_total"] = final
+            rec["pnl"] = float(profit_per_unit(np.array([1 if won else 0]), pick["entry_price"])[0])
+        rows.append(rec)
+
+    per_game = pd.DataFrame(rows)
+    if per_game.empty:
+        return per_game, {"n_picks": 0, "mean_clv": 0.0, "beat_close_rate": 0.0,
+                          "graded": 0, "hit_rate": None, "roi": None}
+
+    clv = per_game["clv_points"].to_numpy(dtype=float)
+    graded = per_game[per_game["result"].isin(["win", "loss"])]
+    summary = {
+        "n_picks": len(per_game),
+        "mean_clv": float(clv.mean()),
+        "beat_close_rate": float(np.mean(clv > 0)),
+        "graded": len(graded),
+        "hit_rate": float((graded["result"] == "win").mean()) if len(graded) else None,
+        "roi": float(graded["pnl"].mean()) if len(graded) else None,
+    }
+    return per_game, summary
 
 
 # ---------- the falsification harness ----------

@@ -5,7 +5,55 @@ import pandas as pd
 
 from collector import db as cdb
 from collector.snapshot import make_snapshot, persist_snapshots
-from dashboard.data import load_snapshots, market_probability_series, run_harness_analysis
+from dashboard.data import (
+    clv_and_results,
+    load_snapshots,
+    market_probability_series,
+    run_harness_analysis,
+)
+
+
+def _totals_game(market="totals"):
+    # G1: three books. pinnacle+draftkings form a stable ~150 consensus; lazybook posts 155 early
+    # (its UNDER is generous). By close everyone is at 154.
+    return pd.DataFrame({
+        "game_id": ["G1"] * 9,
+        "market": [market] * 9,
+        "book": ["pinnacle", "draftkings", "lazybook"] * 3,
+        "line": [150.0, 150.5, 155.0,   152.0, 152.0, 154.0,   154.0, 154.0, 154.0],
+        "over_odds": [-110] * 9,
+        "under_odds": [-110] * 9,
+        "captured_at": [1000, 1000, 1000, 1060, 1060, 1060, 1120, 1120, 1120],
+    })
+
+
+def test_clv_grades_full_game_totals():
+    per_game, summ = clv_and_results(_totals_game("totals"), "totals",
+                                     results={"G1": 148.0}, min_gap=1.5)
+    assert len(per_game) == 1
+    row = per_game.iloc[0]
+    assert row["side"] == "under"          # 155 sits above the 152.5 consensus -> under is generous
+    assert row["entry_line"] == 155.0
+    assert row["closing_line"] == 154.0    # median at the last poll
+    assert abs(row["clv_points"] - 1.0) < 1e-9   # under CLV = entry - close = 155 - 154
+    assert row["result"] == "win"          # final 148 < 155 -> under wins
+    assert summ["graded"] == 1 and summ["hit_rate"] == 1.0
+    assert summ["roi"] is not None
+
+
+def test_clv_is_pending_for_2h_without_period_score():
+    per_game, summ = clv_and_results(_totals_game("totals_h2"), "totals_h2",
+                                     results={"G1": 148.0}, min_gap=1.5)
+    assert per_game.iloc[0]["result"] == "pending"   # /scores can't grade a 2H total
+    assert summ["roi"] is None
+    assert summ["n_picks"] == 1                       # CLV still computed
+
+
+def test_clv_no_pick_when_books_agree():
+    df = _totals_game("totals")
+    df["line"] = 150.0  # everyone identical -> nothing off consensus
+    per_game, summ = clv_and_results(df, "totals", results={}, min_gap=1.5)
+    assert per_game.empty and summ["n_picks"] == 0
 
 
 def test_harness_no_edge_is_killed():

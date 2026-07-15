@@ -16,6 +16,7 @@ import pandas as pd
 import streamlit as st
 
 from dashboard import data
+from eval.kill import clv_kill
 from market.config import load_dotenv
 
 load_dotenv()
@@ -33,8 +34,8 @@ st.caption(
     "never an edge. CLV over ~200 bets is."
 )
 
-tab_live, tab_move, tab_harness = st.tabs(
-    ["📡 Live odds", "📈 Live game", "🧪 Falsification harness"]
+tab_live, tab_move, tab_clv, tab_harness = st.tabs(
+    ["📡 Live odds", "📈 Live game", "🎯 CLV & results", "🧪 Falsification harness"]
 )
 
 
@@ -43,12 +44,30 @@ with tab_live:
     c1, c2, c3 = st.columns([2, 2, 1])
     sport = c1.text_input("Sport key", value="basketball_wnba",
                           help="e.g. basketball_wnba, basketball_nba, basketball_ncaab (Nov–Apr)")
-    market = c2.text_input("Market", value="totals_h2")
-    regions = c3.text_input("Regions", value="us,us2", help="add 'eu' to reach Pinnacle/sharp books")
+    market = c2.text_input("Market", value="totals_h2",
+                           help="totals (full game) · totals_h1 (1st half) · totals_h2 (2nd half)")
+    regions = c3.text_input("Regions", value="us,us2", help="add 'eu' for more books (e.g. Pinnacle)")
 
-    if st.button("Pull live odds", type="primary"):
+    if st.button("List games on the board"):
         try:
-            snap = data.live_market_snapshot(sport, market, regions)
+            st.session_state["live_events"] = data.list_live_events(sport, regions)
+        except Exception as e:
+            st.session_state["live_events"] = []
+            st.error(f"{e}\n\nCheck ODDS_API_KEY, the sport key, and your network.")
+
+    events = st.session_state.get("live_events", [])
+    event_id = None
+    if events:
+        labels = {
+            f"{e.get('away_team','?')} @ {e.get('home_team','?')}  ·  {str(e.get('commence_time',''))[:16]}": e["id"]
+            for e in events
+        }
+        pick = st.selectbox(f"{len(events)} games on the board — choose one", list(labels))
+        event_id = labels[pick]
+
+    if st.button("Pull odds", type="primary"):
+        try:
+            snap = data.live_market_snapshot(sport, market, regions, event_id)
         except Exception as e:
             st.error(f"{e}\n\nCheck ODDS_API_KEY (env or .env), the sport key, and your network.")
             snap = None
@@ -106,8 +125,8 @@ with tab_live:
                 else:
                     st.dataframe(snap.opportunities, use_container_width=True, hide_index=True)
     else:
-        st.info("Enter a sport and click **Pull live odds**. Needs `ODDS_API_KEY` "
-                "(set it in the terminal or a `.env` file).")
+        st.info("Enter a sport, click **List games on the board**, choose a game, then **Pull odds**. "
+                "Needs `ODDS_API_KEY` (set it in the terminal or a `.env` file).")
 
 
 # ============================================================ LINE MOVEMENT
@@ -184,6 +203,67 @@ with tab_move:
         with st.expander("Raw snapshots"):
             st.dataframe(g[["captured_dt", "book", "line", "over_odds", "under_odds", "source"]],
                          use_container_width=True, hide_index=True)
+
+
+# ============================================================ CLV & RESULTS
+with tab_clv:
+    st.markdown(
+        "**Closing line value is the primary metric.** Did our pick beat the closing number? CLV "
+        "tells us in ~200 bets what win rate needs ~2,000 to confirm. A 'pick' here is the earliest "
+        "book that sat ≥ 1.5 pts off the consensus — pure book-shopping, no prediction."
+    )
+    dbp = st.text_input("Snapshot database", value="data/odds.sqlite", key="clv_db")
+    try:
+        clv_snaps = data.load_snapshots(dbp)
+    except Exception as e:
+        st.error(f"Could not read {dbp}: {e}")
+        clv_snaps = pd.DataFrame()
+
+    if clv_snaps.empty:
+        st.info("No snapshots yet — run the monitor first (see the **Live game** tab for the command).")
+    else:
+        cmk = st.selectbox("Market", sorted(clv_snaps["market"].unique()), key="clv_market")
+        s1, s2, s3 = st.columns([2, 1, 1])
+        sport_scores = s1.text_input("Sport (to fetch final scores)", value="basketball_wnba", key="clv_sport")
+        days = s2.number_input("days back", 1, 7, 3, key="clv_days")
+        if s3.button("Fetch final scores"):
+            try:
+                st.session_state["clv_results"] = data.fetch_final_totals(sport_scores, int(days))
+            except Exception as e:
+                st.error(f"scores fetch failed: {e}")
+                st.session_state["clv_results"] = {}
+        results = st.session_state.get("clv_results", {})
+        if cmk != "totals" and results:
+            st.caption("Grading (win/loss/ROI) only works for the full-game `totals` market — a 2H/1H "
+                       "total also needs the period score, which /scores doesn't provide.")
+
+        per_game, summ = data.clv_and_results(clv_snaps, cmk, results)
+        if per_game.empty:
+            st.info(f"No outlier picks in `{cmk}` yet (no book was ≥ 1.5 pts off the consensus).")
+        else:
+            k1, k2, k3, k4, k5 = st.columns(5)
+            k1.metric("Picks", summ["n_picks"])
+            k2.metric("Mean CLV (pts)", f"{summ['mean_clv']:+.2f}")
+            k3.metric("Beat-close rate", f"{summ['beat_close_rate']*100:.0f}%")
+            k4.metric("Graded", summ["graded"])
+            k5.metric("ROI", "—" if summ["roi"] is None else f"{summ['roi']*100:+.1f}%")
+
+            kd = clv_kill(per_game["clv_points"].to_numpy())
+            (st.error if kd.killed else st.success)(kd.line())
+
+            st.markdown("**CLV per pick** — points beaten vs the close (green good, red bad)")
+            bars = alt.Chart(per_game).mark_bar().encode(
+                x=alt.X("game_id:N", sort=None, title=None, axis=alt.Axis(labelLimit=90)),
+                y=alt.Y("clv_points:Q", title="CLV (points)"),
+                color=alt.condition("datum.clv_points >= 0", alt.value(GOOD), alt.value(CRIT)),
+                tooltip=["game_id", "book", "side", "entry_line", "closing_line",
+                         alt.Tooltip("clv_points:Q", format="+.2f"), "result"],
+            ).properties(height=300)
+            st.altair_chart(bars, use_container_width=True)
+            st.dataframe(per_game, use_container_width=True, hide_index=True)
+
+    st.caption("CLV needs ~200 graded picks to be trustworthy; win-rate/ROI needs ~2,000. Below 500 "
+               "the kill check says 'not yet decisive' — that's honest, not broken.")
 
 
 # ============================================================ HARNESS

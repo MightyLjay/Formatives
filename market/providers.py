@@ -63,6 +63,14 @@ class TheOddsAPIProvider:
         """Upcoming/live events for the sport: [{id, commence_time, home_team, away_team}, ...]."""
         return self._get(f"/sports/{self.sport}/events")
 
+    def list_scores(self, days_from: int = 3) -> list[dict]:
+        """Recent/live games with scores: [{id, completed, home_team, away_team, scores:[...]}, ...].
+
+        `scores` is null until a game starts and carries final totals once `completed` is true.
+        Note: this returns FINAL scores only, not a per-period breakdown — enough to grade a
+        full-game total, but a 2H total also needs the 1st-half points (see collector.settle)."""
+        return self._get(f"/sports/{self.sport}/scores", daysFrom=days_from)
+
     def list_sports(self, include_inactive: bool = False) -> list[dict]:
         """All sports the API knows: [{key, group, title, active, ...}, ...].
 
