@@ -123,6 +123,73 @@ def load_snapshots(db_path: str) -> pd.DataFrame:
     return df
 
 
+# ---------- edge checker & paper bets (the "1xbet vs our fair line" workflow) ----------
+
+def recommend_bet(fair_line: float, your_line: float, over_odds: float = -110.0,
+                  under_odds: float = -110.0, sigma: float = 10.0,
+                  min_prob_edge: float = 0.02) -> dict:
+    """Compare a line YOU saw (e.g. on 1xbet) to our fair line and say BET or PASS.
+
+    If your book's number sits above fair, its UNDER is generous; below fair, its OVER is. We model
+    the outcome as Normal(fair, sigma) to turn the points gap into an estimated win probability, then
+    subtract the price you'd pay. Positive `prob_edge` beyond a threshold => a bet. This is an EV
+    estimate against OUR fair line — only as trustworthy as that fair line (needs a sharp anchor).
+    """
+    from eval.metrics import american_to_prob
+
+    diff = your_line - fair_line
+    if diff >= 0:
+        side, price = "under", under_odds
+    else:
+        side, price = "over", over_odds
+    z = diff / max(sigma, 1e-6)
+    p_win = float(stats.norm.cdf(z)) if side == "under" else float(1.0 - stats.norm.cdf(z))
+    prob_edge = p_win - american_to_prob(price)
+    return {
+        "side": side, "your_line": float(your_line), "fair_line": float(fair_line),
+        "edge_points": abs(diff), "price": float(price), "p_win": p_win,
+        "prob_edge": prob_edge, "verdict": "BET" if prob_edge >= min_prob_edge else "PASS",
+    }
+
+
+def log_paper_bet(db_path: str, **fields) -> int:
+    conn = cdb.connect(db_path)
+    rid = cdb.insert_paper_bet(conn, **fields)
+    conn.close()
+    return rid
+
+
+PAPER_COLUMNS = ["id", "game_id", "matchup", "market", "book", "side", "your_line", "your_odds",
+                 "fair_line", "edge_points", "prob_edge", "placed_at", "closing_line",
+                 "final_total", "result", "pnl"]
+
+
+def load_paper_bets(db_path: str) -> pd.DataFrame:
+    import os
+
+    if db_path != ":memory:" and not os.path.exists(db_path):
+        return pd.DataFrame(columns=PAPER_COLUMNS)
+    conn = cdb.connect(db_path)
+    df = pd.read_sql_query("SELECT * FROM paper_bets ORDER BY placed_at DESC", conn)
+    conn.close()
+    if not df.empty:
+        df["placed_dt"] = pd.to_datetime(df["placed_at"], unit="s")
+    return df
+
+
+def paper_bet_summary(df: pd.DataFrame) -> dict:
+    if df.empty:
+        return {"n": 0, "avg_edge_points": 0.0, "avg_prob_edge": 0.0, "graded": 0, "roi": None}
+    graded = df[df["result"].isin(["win", "loss"])]
+    return {
+        "n": len(df),
+        "avg_edge_points": float(df["edge_points"].mean()),
+        "avg_prob_edge": float(df["prob_edge"].dropna().mean()) if df["prob_edge"].notna().any() else 0.0,
+        "graded": len(graded),
+        "roi": float(graded["pnl"].mean()) if len(graded) and graded["pnl"].notna().any() else None,
+    }
+
+
 # ---------- CLV & results ----------
 
 def fetch_final_totals(sport: str, days_from: int = 3, regions: str = "us,us2") -> dict[str, float]:

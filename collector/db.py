@@ -63,6 +63,27 @@ CREATE TABLE IF NOT EXISTS grades (
     graded_at   REAL NOT NULL,
     UNIQUE (game_id, book, bet_side, entry_line)
 );
+
+-- Paper bets you log from the edge checker (e.g. a line you saw on 1xbet vs our fair line).
+-- Mutable: closing_line/final_total/result/pnl are filled in later when you settle. PAPER ONLY.
+CREATE TABLE IF NOT EXISTS paper_bets (
+    id           INTEGER PRIMARY KEY,
+    game_id      TEXT,
+    matchup      TEXT,
+    market       TEXT,
+    book         TEXT,             -- where you'd bet it (e.g. '1xbet')
+    side         TEXT,             -- over | under
+    your_line    REAL,             -- the number YOU saw at your book
+    your_odds    REAL,             -- American price at your book
+    fair_line    REAL,             -- our fair/consensus line at entry
+    edge_points  REAL,             -- |your_line - fair_line|
+    prob_edge    REAL,             -- estimated win prob - implied price
+    placed_at    REAL,
+    closing_line REAL,             -- filled in later to compute CLV
+    final_total  REAL,             -- filled in later to grade
+    result       TEXT DEFAULT 'pending',   -- pending | win | loss | push
+    pnl          REAL
+);
 """
 
 
@@ -166,6 +187,26 @@ def record_grade(
     )
     conn.commit()
     return cur.rowcount > 0
+
+
+def insert_paper_bet(conn: sqlite3.Connection, **f) -> int:
+    """Log a paper bet. Returns its row id. PAPER ONLY — nothing is placed anywhere."""
+    cur = conn.execute(
+        """INSERT INTO paper_bets
+           (game_id, matchup, market, book, side, your_line, your_odds, fair_line,
+            edge_points, prob_edge, placed_at, result)
+           VALUES (:game_id, :matchup, :market, :book, :side, :your_line, :your_odds,
+                   :fair_line, :edge_points, :prob_edge, :placed_at, 'pending')""",
+        {
+            "game_id": f.get("game_id"), "matchup": f.get("matchup"), "market": f.get("market"),
+            "book": f.get("book", "1xbet"), "side": f["side"], "your_line": f["your_line"],
+            "your_odds": f.get("your_odds", -110.0), "fair_line": f["fair_line"],
+            "edge_points": f["edge_points"], "prob_edge": f.get("prob_edge"),
+            "placed_at": f.get("placed_at", time.time()),
+        },
+    )
+    conn.commit()
+    return cur.lastrowid
 
 
 def snapshot_count(conn: sqlite3.Connection) -> int:

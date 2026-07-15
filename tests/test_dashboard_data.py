@@ -7,10 +7,54 @@ from collector import db as cdb
 from collector.snapshot import make_snapshot, persist_snapshots
 from dashboard.data import (
     clv_and_results,
+    load_paper_bets,
     load_snapshots,
+    log_paper_bet,
     market_probability_series,
+    paper_bet_summary,
+    recommend_bet,
     run_harness_analysis,
 )
+
+
+def test_recommend_bet_flags_a_real_gap():
+    # 1xbet at 108.5 when fair is 104.5 -> its UNDER is generous -> BET under.
+    rec = recommend_bet(fair_line=104.5, your_line=108.5, over_odds=-110, under_odds=-110, sigma=9.0)
+    assert rec["side"] == "under"
+    assert rec["edge_points"] == 4.0
+    assert rec["p_win"] > 0.5
+    assert rec["prob_edge"] > 0
+    assert rec["verdict"] == "BET"
+
+
+def test_recommend_bet_passes_on_no_gap():
+    rec = recommend_bet(fair_line=104.5, your_line=104.5, sigma=9.0)
+    assert rec["edge_points"] == 0.0
+    assert rec["verdict"] == "PASS"      # 0 points off fair loses to the vig
+    assert rec["prob_edge"] < 0
+
+
+def test_recommend_bet_below_fair_is_over():
+    rec = recommend_bet(fair_line=104.5, your_line=100.0, sigma=9.0)
+    assert rec["side"] == "over"         # 1xbet's low line -> its OVER is generous
+    assert rec["verdict"] == "BET"
+
+
+def test_paper_bet_roundtrip(tmp_path):
+    path = str(tmp_path / "odds.sqlite")
+    log_paper_bet(path, game_id="G1", matchup="Fire @ Sun", market="totals_h2", book="1xbet",
+                  side="under", your_line=108.5, your_odds=-110, fair_line=104.5,
+                  edge_points=4.0, prob_edge=0.05)
+    df = load_paper_bets(path)
+    assert len(df) == 1
+    row = df.iloc[0]
+    assert row["book"] == "1xbet" and row["side"] == "under" and row["result"] == "pending"
+    summ = paper_bet_summary(df)
+    assert summ["n"] == 1 and summ["avg_edge_points"] == 4.0 and summ["roi"] is None
+
+
+def test_load_paper_bets_missing_file(tmp_path):
+    assert load_paper_bets(str(tmp_path / "nope.sqlite")).empty
 
 
 def _totals_game(market="totals"):
