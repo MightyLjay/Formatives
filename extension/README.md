@@ -21,10 +21,15 @@ A "📈 Line Tracker" card appears in the bottom-right of every page.
 ## Use
 
 1. Open the page with the numbers you want to watch (e.g. a 1xbet game page).
-2. In the card, click **🎯 Pick a number**.
-3. Click the exact number on the page you want to track (the odds like `1.87`, or a total like `81.5`).
-4. It now polls that number every 2 seconds and draws it live. **Pause** / **Clear** as needed;
-   drag the card by its blue header; **✕** closes it.
+2. In the card, click **+ Over** (or **+ Under** / **+ Total**) to label the line you're about to pick.
+3. Click **straight on the odds number that moves** — e.g. `1.944`, not the `Over 162.5` label (the
+   line barely moves; the price is what drifts). The tracker locks onto the tight odds cell under your
+   click, not the big scoreboard/background behind it.
+4. It now polls that number every 2 seconds and draws it live. Add more lines to overlay Over vs Under.
+   **Pause** / **Clear all** as needed; drag the card by its blue header; **✕** closes it.
+
+If it says *"Couldn't read a number"*, click more precisely on the digits and paste the diagnostic
+message back — it tells me exactly what was under your cursor.
 
 **To check it's accurate:** watch the big number in the card — it should always match the number
 you clicked on the page. When 1xbet moves the line/price, the graph moves with it.

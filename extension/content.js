@@ -1,9 +1,9 @@
 // Line Tracker — a read-only overlay that graphs numbers you pick on a page.
 //
-// v0.4: track several numbers at once, each labelled (Over / Under / Total / …); read by SCREEN
-// POSITION each tick (survives live re-renders); and see THROUGH transparent overlays that live
-// books stack over their odds (scan the whole element stack at the point, not just the top one).
-// When it can't read a number it says exactly what it found, so the layout can be diagnosed.
+// v0.5: track several numbers at once, each labelled (Over / Under / Total / …); read by SCREEN
+// POSITION each tick (survives live re-renders); and lock onto the SMALLEST, tightest element with
+// a short number at the click point (so it grabs the odds cell, not a giant background/scoreboard
+// container). Reports what it found when it can't read a number.
 //
 // Sends NOTHING anywhere, stores NOTHING, cannot place a bet. Reads ONE book's own numbers, so it
 // is not an edge by itself — an edge needs a sharp fair line (see FINDINGS.md). Each line is scaled
@@ -20,6 +20,7 @@
     { label: "Total", color: "#0072B2" },
     { label: "Other", color: "#CC79A7" },
   ];
+  var MAX_TEXT = 16;  // ignore elements whose text is longer than this (containers/overlays, not odds)
   var state = { tracks: [], t0: null, timer: null, picking: false, pendingLabel: null, pendingColor: null, justPicked: false, intervalMs: 2000 };
 
   var panel = document.createElement("div");
@@ -39,7 +40,7 @@
     '<div style="padding:10px;">' +
       '<div style="display:flex;gap:5px;margin-bottom:8px;">' + btns + "</div>" +
       '<div id="h2-label" style="color:' + MUTED + ';margin-bottom:8px;line-height:1.3;">' +
-        'Click <b>+ Over</b> (or Under/Total), then click straight on the digits on the page.</div>' +
+        'Click <b>+ Over</b> (or Under/Total), then click straight on the <b>odds</b> number (e.g. 1.944) — that\'s the one that moves.</div>' +
       '<canvas id="h2-canvas" width="310" height="120" style="width:100%;height:120px;background:#fcfcfb;' +
         'border:1px solid #eee;border-radius:6px;display:block;"></canvas>' +
       '<div id="h2-legend" style="margin-top:8px;"></div>' +
@@ -81,29 +82,29 @@
     var c = (el.className && el.className.toString) ? el.className.toString().trim().split(/\s+/)[0] : "";
     return "<" + (el.tagName || "?").toLowerCase() + (c ? ' class="' + c.slice(0, 22) + '"' : "") + ">";
   }
-  // Read the number at a screen spot, seeing THROUGH transparent overlays: scan the whole element
-  // stack at the point and take the shortest text that is a number (the leaf digits, not a big
-  // container). Reports a diagnostic string when it can't read one.
+  // Read the number at a screen spot. Scan the element stack, keep only SHORT numeric texts (skip
+  // giant containers/overlays), and among those pick the SMALLEST bounding box — the tight odds cell.
   function numberAt(px, py) {
     var vx = px - window.scrollX, vy = py - window.scrollY;
     var els = document.elementsFromPoint ? document.elementsFromPoint(vx, vy) : [document.elementFromPoint(vx, vy)];
     els = els || [];
-    var best = null, topTag = "";
+    var best = null, topTag = "", sawFrame = false;
     for (var i = 0; i < els.length; i++) {
       var el = els[i];
       if (!el || el === panel || panel.contains(el) || el === outline) continue;
       if (!topTag) topTag = describe(el);
-      if (el.tagName === "IFRAME") return { v: null, text: "", diag: "the number is inside an embedded frame — this tool can't read into it" };
-      var raw = (el.textContent || "").replace(/ /g, " ").trim();
-      if (!raw) continue;
+      if (el.tagName === "IFRAME") { sawFrame = true; continue; }
+      var raw = (el.textContent || "").replace(/\s+/g, " ").trim();
+      if (!raw || raw.length > MAX_TEXT) continue;       // skip big containers/overlays
       var m = raw.replace(/[,\s]/g, "").match(/-?\d+(?:\.\d+)?/);
-      if (m) {
-        if (best === null || raw.length < best.len) best = { v: parseFloat(m[0]), text: raw.slice(0, 24), len: raw.length };
-        if (raw.length <= 8) break; // basically just the digits — good enough
-      }
+      if (!m) continue;
+      var r = el.getBoundingClientRect();
+      var area = Math.max(r.width * r.height, 1);
+      if (best === null || area < best.area) best = { v: parseFloat(m[0]), text: raw.slice(0, 24), area: area };
     }
     if (best) return { v: best.v, text: best.text };
-    return { v: null, text: "", diag: topTag ? ("found " + topTag + " with no digits") : "found nothing there" };
+    if (sawFrame) return { v: null, text: "", diag: "the odds are inside an embedded frame — this tool can't read into it" };
+    return { v: null, text: "", diag: topTag ? ("only found " + topTag + " (no short number)") : "found nothing there" };
   }
 
   function onPick(e) {
@@ -114,18 +115,18 @@
     var r = numberAt(px, py);
     if (r.v == null) {
       $("#h2-label").innerHTML = '<span style="color:' + ORANGE + '">Couldn\'t read a number — ' + (r.diag || "no number") +
-        ". Try clicking right on the digits. If it keeps failing, tell me what it says here.</span>";
+        ". Click right on the odds digits. If it keeps failing, paste this message to me.</span>";
       return;
     }
     state.tracks.push({ label: state.pendingLabel, color: state.pendingColor, px: px, py: py, series: [], last: r.v });
-    $("#h2-label").textContent = "Tracking " + state.pendingLabel + " (now " + r.v + '). Add another, or watch it move. reading: "' + r.text + '"';
+    $("#h2-label").textContent = "Tracking " + state.pendingLabel + " — now " + r.v + '. Add another, or watch it move.';
     if (!state.timer) start();
     renderLegend();
   }
   function swallow(e) { if (state.picking || state.justPicked) { e.preventDefault(); e.stopPropagation(); if (e.stopImmediatePropagation) e.stopImmediatePropagation(); } }
   function beginPicking(label, color) {
     state.picking = true; state.pendingLabel = label; state.pendingColor = color;
-    $("#h2-label").textContent = "Click the " + label + " number on the page…";
+    $("#h2-label").textContent = "Click the " + label + " ODDS number on the page…";
     document.addEventListener("mousemove", onMove, true);
     document.addEventListener("pointerdown", onPick, true);
     document.addEventListener("mousedown", swallow, true);
