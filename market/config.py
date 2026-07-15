@@ -13,7 +13,9 @@ def load_dotenv(path: str = ".env") -> None:
     if not os.path.exists(path):
         return
     try:
-        with open(path, "r", encoding="utf-8") as fh:
+        # utf-8-sig strips a leading BOM if present — Windows PowerShell's `Out-File -Encoding utf8`
+        # writes one, which would otherwise corrupt the first key name (a very common .env gotcha).
+        with open(path, "r", encoding="utf-8-sig") as fh:
             for line in fh:
                 line = line.strip()
                 if not line or line.startswith("#") or "=" not in line:

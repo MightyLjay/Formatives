@@ -27,3 +27,13 @@ def test_loads_keys_and_respects_precedence(tmp_path, monkeypatch):
 
 def test_missing_file_is_noop(tmp_path):
     load_dotenv(str(tmp_path / "does-not-exist.env"))  # must not raise
+
+
+def test_loads_utf8_bom_file(tmp_path, monkeypatch):
+    # PowerShell's `Out-File -Encoding utf8` writes a UTF-8 BOM; the loader must strip it so the
+    # first key name isn't corrupted to "﻿ODDS_API_KEY".
+    env = tmp_path / ".env"
+    env.write_bytes(b"\xef\xbb\xbfODDS_API_KEY=frombom\n")
+    monkeypatch.delenv("ODDS_API_KEY", raising=False)
+    load_dotenv(str(env))
+    assert os.environ.get("ODDS_API_KEY") == "frombom"
