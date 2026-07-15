@@ -1,16 +1,20 @@
 // Line Tracker — a read-only overlay that graphs any number you pick on a page.
 //
-// It runs entirely in your browser: it reads the text of the element you click, every couple of
-// seconds, parses a number out of it, and draws a live line. It sends NOTHING anywhere, stores
-// NOTHING, and cannot place a bet. Use it to see the tracking/graphing concept work against a real
-// page (including 1xbet). It gives you no edge on its own — that still needs a sharp fair line to
-// compare against (see the project's FINDINGS.md).
+// It runs entirely in your browser: you click a spot (an odds price, a total), and every couple of
+// seconds it reads whatever number is at that spot and draws a live line. It sends NOTHING
+// anywhere, stores NOTHING, and cannot place a bet.
+//
+// Why it reads by SCREEN POSITION, not by element: live books like 1xbet destroy and rebuild their
+// odds elements on every update, so holding onto the clicked element goes stale instantly. Reading
+// the element currently at the clicked position survives those re-renders.
 (function () {
+  if (window.top !== window) return;            // only the top page, never inside iframes
   if (window.__h2LineTracker) return;
   window.__h2LineTracker = true;
 
   var BLUE = "#0072B2", ORANGE = "#D55E00", INK = "#1a1a19", MUTED = "#6b6b68";
-  var state = { el: null, series: [], t0: null, timer: null, picking: false, intervalMs: 2000 };
+  // px/py are PAGE coordinates (survive scrolling); we convert to viewport each read.
+  var state = { px: null, py: null, series: [], t0: null, timer: null, picking: false, intervalMs: 2000 };
 
   // ----- floating panel -----
   var panel = document.createElement("div");
@@ -30,7 +34,7 @@
         '<button id="h2-clear" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;background:#f4f4f2;cursor:pointer;">Clear</button>' +
       "</div>" +
       '<div id="h2-label" style="color:' + MUTED + ';margin-bottom:6px;line-height:1.3;">' +
-        'Click <b>Pick a number</b>, then click the odds or total on the page you want to watch.</div>' +
+        'Click <b>Pick a number</b>, then click straight on the digits (the odds like 1.87, or a total like 81.5).</div>' +
       '<div id="h2-value" style="font-size:24px;font-weight:800;margin-bottom:6px;">—</div>' +
       '<canvas id="h2-canvas" width="300" height="120" style="width:100%;height:120px;background:#fcfcfb;' +
         'border:1px solid #eee;border-radius:6px;display:block;"></canvas>' +
@@ -58,8 +62,7 @@
     window.addEventListener("mouseup", function () { down = false; });
   })();
 
-  // ----- element picker -----
-  var hoverEl = null;
+  // ----- hover outline while picking -----
   var outline = document.createElement("div");
   outline.style.cssText =
     "position:fixed;z-index:2147483646;border:2px solid " + ORANGE +
@@ -67,71 +70,104 @@
   document.documentElement.appendChild(outline);
 
   function onMove(e) {
+    if (!state.picking) return;
     var el = document.elementFromPoint(e.clientX, e.clientY);
-    if (!el || el === panel || panel.contains(el) || el === outline) return;
-    hoverEl = el;
+    if (!el || el === panel || panel.contains(el) || el === outline) { outline.style.display = "none"; return; }
     var r = el.getBoundingClientRect();
     outline.style.display = "block";
     outline.style.left = r.left + "px"; outline.style.top = r.top + "px";
     outline.style.width = r.width + "px"; outline.style.height = r.height + "px";
   }
-  function onClick(e) {
+
+  // Read the number at the picked spot, RIGHT NOW (re-queries the live DOM every time).
+  function readAtSpot() {
+    if (state.px == null) return { v: null, text: "" };
+    var vx = state.px - window.scrollX, vy = state.py - window.scrollY;
+    var el = document.elementFromPoint(vx, vy);
+    if (!el || panel.contains(el)) return { v: null, text: "" };
+    var raw = (el.textContent || "").replace(/ /g, " ").trim();
+    var m = raw.replace(/[,\s]/g, "").match(/-?\d+(?:\.\d+)?/);
+    return { v: m ? parseFloat(m[0]) : null, text: raw.slice(0, 26) };
+  }
+
+  // Pick on pointerdown (fires before the site's own handlers); block the site from reacting.
+  function onPick(e) {
     if (!state.picking || panel.contains(e.target)) return;
-    e.preventDefault(); e.stopPropagation();
-    state.el = hoverEl; state.picking = false; outline.style.display = "none";
-    document.removeEventListener("mousemove", onMove, true);
-    document.removeEventListener("click", onClick, true);
-    $("#h2-pick").textContent = "🎯 Pick a number";
-    var txt = (state.el.textContent || "").trim().replace(/\s+/g, " ").slice(0, 48);
-    $("#h2-label").textContent = "Tracking: " + txt;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+    state.px = e.clientX + window.scrollX;
+    state.py = e.clientY + window.scrollY;
+    endPicking();
+    var r = readAtSpot();
+    if (r.v == null) {
+      $("#h2-label").innerHTML =
+        '<span style="color:' + ORANGE + '">Couldn\'t read a number there. Click <b>directly on the digits</b> ' +
+        '(zoom in if they\'re tiny), not the label around them.</span>';
+      state.px = null; state.py = null;
+      return;
+    }
+    $("#h2-label").textContent = "Tracking the number at that spot (currently " + r.v + ").";
     state.series = []; state.t0 = null;
     start();
   }
-  $("#h2-pick").onclick = function () {
+  // Swallow the click/mouse events that follow the pick so the book doesn't open a bet slip.
+  function swallow(e) { if (state.picking || state.justPicked) { e.preventDefault(); e.stopPropagation(); if (e.stopImmediatePropagation) e.stopImmediatePropagation(); } }
+
+  function beginPicking() {
     state.picking = true;
     $("#h2-pick").textContent = "Click the number…";
     document.addEventListener("mousemove", onMove, true);
-    document.addEventListener("click", onClick, true);
-  };
-
-  // ----- read + poll + draw -----
-  function readNumber() {
-    if (!state.el) return null;
-    var m = (state.el.textContent || "").replace(/[,\s]/g, "").match(/-?\d+(?:\.\d+)?/);
-    return m ? parseFloat(m[0]) : null;
+    document.addEventListener("pointerdown", onPick, true);
+    document.addEventListener("mousedown", swallow, true);
+    document.addEventListener("click", swallow, true);
   }
+  function endPicking() {
+    state.picking = false;
+    state.justPicked = true;
+    outline.style.display = "none";
+    $("#h2-pick").textContent = "🎯 Pick a number";
+    document.removeEventListener("mousemove", onMove, true);
+    document.removeEventListener("pointerdown", onPick, true);
+    // keep swallowing for a beat so the trailing click doesn't hit the site
+    setTimeout(function () {
+      state.justPicked = false;
+      document.removeEventListener("mousedown", swallow, true);
+      document.removeEventListener("click", swallow, true);
+    }, 400);
+  }
+  $("#h2-pick").onclick = beginPicking;
+
+  // ----- poll + draw -----
   function tick() {
-    var v = readNumber();
-    if (v == null) return;
+    var r = readAtSpot();
+    if (r.v == null) { $("#h2-meta").textContent = "no number at that spot right now (site may have re-laid-out — re-pick)"; return; }
     var now = Date.now();
     if (state.t0 == null) state.t0 = now;
-    state.series.push({ t: (now - state.t0) / 1000, v: v });
+    state.series.push({ t: (now - state.t0) / 1000, v: r.v });
     if (state.series.length > 900) state.series.shift();
-    $("#h2-value").textContent = v;
-    draw();
+    $("#h2-value").textContent = r.v;
+    draw(r.text);
   }
   function start() { stop(); tick(); state.timer = setInterval(tick, state.intervalMs); $("#h2-pause").textContent = "Pause"; }
   function stop() { if (state.timer) clearInterval(state.timer); state.timer = null; }
 
   $("#h2-pause").onclick = function () {
     if (state.timer) { stop(); $("#h2-pause").textContent = "Resume"; }
-    else if (state.el) { start(); }
+    else if (state.px != null) { start(); }
   };
-  $("#h2-clear").onclick = function () { state.series = []; state.t0 = null; draw(); };
+  $("#h2-clear").onclick = function () { state.series = []; state.t0 = null; draw(""); };
   $("#h2-close").onclick = function () {
-    stop();
-    document.removeEventListener("mousemove", onMove, true);
-    document.removeEventListener("click", onClick, true);
-    panel.remove(); outline.remove(); window.__h2LineTracker = false;
+    stop(); endPicking(); panel.remove(); outline.remove(); window.__h2LineTracker = false;
   };
 
-  function draw() {
+  function draw(readingText) {
     var w = canvas.width, h = canvas.height, pad = 8;
     ctx.clearRect(0, 0, w, h);
     var s = state.series;
     if (s.length < 2) {
       ctx.fillStyle = MUTED; ctx.font = "12px system-ui";
-      ctx.fillText("waiting for data…", 10, 22);
+      ctx.fillText(s.length === 1 ? "got 1 reading — next point in 2s…" : "waiting for data…", 10, 22);
       return;
     }
     var vs = s.map(function (p) { return p.v; });
@@ -149,6 +185,6 @@
     ctx.fillText(String(mn), 3, h - 3);
     $("#h2-meta").textContent =
       s.length + " points · min " + mn + " · max " + mx +
-      " · every " + (state.intervalMs / 1000) + "s · read-only";
+      (readingText ? ' · reading: "' + readingText + '"' : "");
   }
 })();
