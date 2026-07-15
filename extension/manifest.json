@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Line Tracker — h2-totals-lab",
+  "version": "0.1.0",
+  "description": "Pick any number on a web page (an odds price, a total) and watch it graphed live. Read-only overlay; nothing is sent anywhere, nothing is placed.",
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
